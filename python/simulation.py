@@ -1129,6 +1129,12 @@ class Simulation(object):
           the minimum refractive index (usually 1), and in practice $S$ should be slightly
           smaller.
 
+        + **`loop_tile_base` [`number`]** — To improve the memory locality of the step-curl
+          field updates, Meep has an experimental feature to "tile" the loop over the Yee grid
+          voxels. The splitting of this loop into tiles or subdomains involves a recursive-bisection
+          method in which the base case for the number of voxels is specified using this parameter.
+          The default value is 0 or no tiling; a typical nonzero value to try would be 10000.
+
         + **`output_volume` [`Volume` class ]** — Specifies the default region of space
           that is output by the HDF5 output functions (below); see also the `Volume` class
           which manages `meep::volume*` objects. Default is `None`, which means that the
@@ -1289,6 +1295,8 @@ class Simulation(object):
                 return 2
             else:
                 return 3
+        elif self.dimensions == 2 and self.is_cylindrical:
+            return mp.CYLINDRICAL
         return self.dimensions
 
     def _get_valid_material_frequencies(self):
@@ -2445,7 +2453,7 @@ class Simulation(object):
 
     def add_dft_fields(self, *args, **kwargs):
         """
-        `add_dft_fields(cs, fcen, df, nfreq, freq, where=None, center=None, size=None, yee_grid=False, decimation_factor=1)` ##sig
+        `add_dft_fields(cs, fcen, df, nfreq, freq, where=None, center=None, size=None, yee_grid=False, decimation_factor=0)` ##sig
 
         Given a list of field components `cs`, compute the Fourier transform of these
         fields for `nfreq` equally spaced frequencies covering the frequency range
@@ -2455,13 +2463,14 @@ class Simulation(object):
         default routine interpolates the Fourier-transformed fields at the center of each
         voxel within the specified volume. Alternatively, the exact Fourier-transformed
         fields evaluated at each corresponding Yee grid point is available by setting
-        `yee_grid` to `True`. To reduce the memory-bandwidth burden of
-        accumulating DFT fields, an integer `decimation_factor` >= 1 can be
-        specified. DFT field values are updated every `decimation_factor`
-        timesteps. Use this feature with care, as the decimated timeseries may be
-        corrupted by [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
-        The choice of decimation factor should take into account the properties of all sources
-        in the simulation as well as the frequency range of the DFT field monitor.
+        `yee_grid` to `True`. To reduce the memory-bandwidth burden of accumulating
+        DFT fields, an integer `decimation_factor` can be specified for updating the DFT
+        fields at every `decimation_factor` timesteps. If `decimation_factor` is 0 (the default),
+        this value is automatically determined from the
+        [Nyquist rate](https://en.wikipedia.org/wiki/Nyquist_rate) of the bandwidth-limited
+        sources and this DFT monitor. It can be turned off by setting it to 1. Use this feature
+        with care, as the decimated timeseries may be corrupted by
+        [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
         """
         components = args[0]
         args = fix_dft_args(args, 1)
@@ -2470,7 +2479,7 @@ class Simulation(object):
         center = kwargs.get('center', None)
         size = kwargs.get('size', None)
         yee_grid = kwargs.get('yee_grid', False)
-        decimation_factor = kwargs.get('decimation_factor', 1)
+        decimation_factor = kwargs.get('decimation_factor', 0)
         center_v3 = Vector3(*center) if center is not None else None
         size_v3 = Vector3(*size) if size is not None else None
         use_centered_grid = not yee_grid
@@ -2519,7 +2528,7 @@ class Simulation(object):
 
     def add_near2far(self, *args, **kwargs):
         """
-        `add_near2far(fcen, df, nfreq, freq, Near2FarRegions, nperiods=1, decimation_factor=1)`  ##sig
+        `add_near2far(fcen, df, nfreq, freq, Near2FarRegions, nperiods=1, decimation_factor=0)`  ##sig
 
         Add a bunch of `Near2FarRegion`s to the current simulation (initializing the
         fields if they have not yet been initialized), telling Meep to accumulate the
@@ -2527,18 +2536,19 @@ class Simulation(object):
         covering the frequency range `fcen-df/2` to `fcen+df/2` or an array/list `freq`
         for arbitrarily spaced frequencies. Return a `near2far` object, which you can pass
         to the functions below to get the far fields. To reduce the memory-bandwidth burden of
-        accumulating DFT fields, an integer `decimation_factor` >= 1 can be
-        specified. DFT field values are updated every `decimation_factor`
-        timesteps. Use this feature with care, as the decimated timeseries may be
-        corrupted by [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
-        The choice of decimation factor should take into account the properties of all sources
-        in the simulation as well as the frequency range of the DFT field monitor.
+        accumulating DFT fields, an integer `decimation_factor` can be specified for updating the DFT
+        fields at every `decimation_factor` timesteps. If `decimation_factor` is 0 (the default),
+        this value is automatically determined from the
+        [Nyquist rate](https://en.wikipedia.org/wiki/Nyquist_rate) of the bandwidth-limited
+        sources and this DFT monitor. It can be turned off by setting it to 1. Use this feature
+        with care, as the decimated timeseries may be corrupted by
+        [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
         """
         args = fix_dft_args(args, 0)
         freq = args[0]
         near2fars = args[1:]
         nperiods = kwargs.get('nperiods', 1)
-        decimation_factor = kwargs.get('decimation_factor', 1)
+        decimation_factor = kwargs.get('decimation_factor', 0)
         n2f = DftNear2Far(self._add_near2far, [freq, nperiods, near2fars, decimation_factor])
         self.dft_objects.append(n2f)
         return n2f
@@ -2551,7 +2561,7 @@ class Simulation(object):
 
     def add_energy(self, *args, **kwargs):
         """
-        `add_energy(fcen, df, nfreq, freq, EnergyRegions, decimation_factor=1)`  ##sig
+        `add_energy(fcen, df, nfreq, freq, EnergyRegions, decimation_factor=0)`  ##sig
 
         Add a bunch of `EnergyRegion`s to the current simulation (initializing the fields
         if they have not yet been initialized), telling Meep to accumulate the appropriate
@@ -2559,17 +2569,18 @@ class Simulation(object):
         frequency range `fcen-df/2` to `fcen+df/2` or an array/list `freq` for arbitrarily
         spaced frequencies. Return an *energy object*, which you can pass to the functions
         below to get the energy spectrum, etcetera. To reduce the memory-bandwidth burden of
-        accumulating DFT fields, an integer `decimation_factor` >= 1 can be
-        specified. DFT field values are updated every `decimation_factor`
-        timesteps. Use this feature with care, as the decimated timeseries may be
-        corrupted by [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
-        The choice of decimation factor should take into account the properties of all sources
-        in the simulation as well as the frequency range of the DFT field monitor.
+        accumulating DFT fields, an integer `decimation_factor` can be specified for updating the DFT
+        fields at every `decimation_factor` timesteps. If `decimation_factor` is 0 (the default),
+        this value is automatically determined from the
+        [Nyquist rate](https://en.wikipedia.org/wiki/Nyquist_rate) of the bandwidth-limited
+        sources and this DFT monitor. It can be turned off by setting it to 1. Use this feature
+        with care, as the decimated timeseries may be corrupted by
+        [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
         """
         args = fix_dft_args(args, 0)
         freq = args[0]
         energys = args[1:]
-        decimation_factor = kwargs.get('decimation_factor', 1)
+        decimation_factor = kwargs.get('decimation_factor', 0)
         en = DftEnergy(self._add_energy, [freq, energys, decimation_factor])
         self.dft_objects.append(en)
         return en
@@ -2772,7 +2783,7 @@ class Simulation(object):
 
     def add_force(self, *args, **kwargs):
         """
-        `add_force(fcen, df, nfreq, freq, ForceRegions, decimation_factor=1)`  ##sig
+        `add_force(fcen, df, nfreq, freq, ForceRegions, decimation_factor=0)`  ##sig
 
         Add a bunch of `ForceRegion`s to the current simulation (initializing the fields
         if they have not yet been initialized), telling Meep to accumulate the appropriate
@@ -2780,17 +2791,18 @@ class Simulation(object):
         frequency range `fcen-df/2` to `fcen+df/2` or an array/list `freq` for arbitrarily
         spaced frequencies. Return a `force`object, which you can pass to the functions
         below to get the force spectrum, etcetera. To reduce the memory-bandwidth burden of
-        accumulating DFT fields, an integer `decimation_factor` >= 1 can be
-        specified. DFT field values are updated every `decimation_factor`
-        timesteps. Use this feature with care, as the decimated timeseries may be
-        corrupted by [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
-        The choice of decimation factor should take into account the properties of all sources
-        in the simulation as well as the frequency range of the DFT field monitor.
+        accumulating DFT fields, an integer `decimation_factor` can be specified for updating the DFT
+        fields at every `decimation_factor` timesteps. If `decimation_factor` is 0 (the default),
+        this value is automatically determined from the
+        [Nyquist rate](https://en.wikipedia.org/wiki/Nyquist_rate) of the bandwidth-limited
+        sources and this DFT monitor. It can be turned off by setting it to 1. Use this feature
+        with care, as the decimated timeseries may be corrupted by
+        [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
         """
         args = fix_dft_args(args, 0)
         freq = args[0]
         forces = args[1:]
-        decimation_factor = kwargs.get('decimation_factor', 1)
+        decimation_factor = kwargs.get('decimation_factor', 0)
         force = DftForce(self._add_force, [freq, forces, decimation_factor])
         self.dft_objects.append(force)
         return force
@@ -2877,7 +2889,7 @@ class Simulation(object):
 
     def add_flux(self, *args, **kwargs):
         """
-        `add_flux(fcen, df, nfreq, freq, FluxRegions, decimation_factor=1)` ##sig
+        `add_flux(fcen, df, nfreq, freq, FluxRegions, decimation_factor=0)` ##sig
 
         Add a bunch of `FluxRegion`s to the current simulation (initializing the fields if
         they have not yet been initialized), telling Meep to accumulate the appropriate
@@ -2885,17 +2897,20 @@ class Simulation(object):
         frequency range `fcen-df/2` to `fcen+df/2` or an array/list `freq` for arbitrarily
         spaced frequencies. Return a *flux object*, which you can pass to the functions
         below to get the flux spectrum, etcetera. To reduce the memory-bandwidth burden of
-        accumulating DFT fields, an integer `decimation_factor` >= 1 can be
-        specified. DFT field values are updated every `decimation_factor`
-        timesteps. Use this feature with care, as the decimated timeseries may be
-        corrupted by [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies.
-        The choice of decimation factor should take into account the properties of all sources
+        accumulating DFT fields, an integer `decimation_factor` can be specified for updating the DFT
+        fields at every `decimation_factor` timesteps. If `decimation_factor` is 0 (the default),
+        this value is automatically determined from the
+        [Nyquist rate](https://en.wikipedia.org/wiki/Nyquist_rate) of the bandwidth-limited
+        sources and this DFT monitor. It can be turned off by setting it to 1. Use this feature
+        with care, as the decimated timeseries may be corrupted by
+        [aliasing](https://en.wikipedia.org/wiki/Aliasing) of high frequencies. The choice
+        of decimation factor should take into account the properties of all sources
         in the simulation as well as the frequency range of the DFT field monitor.
         """
         args = fix_dft_args(args, 0)
         freq = args[0]
         fluxes = args[1:]
-        decimation_factor = kwargs.get('decimation_factor', 1)
+        decimation_factor = kwargs.get('decimation_factor', 0)
         flux = DftFlux(self._add_flux, [freq, fluxes, decimation_factor])
         self.dft_objects.append(flux)
         return flux
@@ -2908,14 +2923,14 @@ class Simulation(object):
 
     def add_mode_monitor(self, *args, **kwargs):
         """
-        `add_mode_monitor(fcen, df, nfreq, freq, ModeRegions, decimation_factor=1)`  ##sig
+        `add_mode_monitor(fcen, df, nfreq, freq, ModeRegions, decimation_factor=0)`  ##sig
 
         Similar to `add_flux`, but for use with `get_eigenmode_coefficients`.
         """
         args = fix_dft_args(args, 0)
         freq = args[0]
         fluxes = args[1:]
-        decimation_factor = kwargs.get('decimation_factor', 1)
+        decimation_factor = kwargs.get('decimation_factor', 0)
         yee_grid = kwargs.get("yee_grid", False)
         flux = DftFlux(self._add_mode_monitor, [freq, fluxes, yee_grid, decimation_factor])
         self.dft_objects.append(flux)
